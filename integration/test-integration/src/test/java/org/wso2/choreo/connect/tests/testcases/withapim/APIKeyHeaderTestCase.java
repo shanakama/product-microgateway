@@ -55,21 +55,22 @@ public class APIKeyHeaderTestCase extends ApimBaseTest {
     void start() throws Exception {
         super.initWithSuperTenant();
 
-        APIRequest apiRequest = PublisherUtils.createSampleAPIRequest(SAMPLE_API_NAME, SAMPLE_API_CONTEXT,
-                SAMPLE_API_VERSION, user.getUserName());
-        // Add security scheme to the API
-        List<String> securitySchemeList = new ArrayList<>();
-        securitySchemeList.add("api_key");
-        apiRequest.setSecurityScheme(securitySchemeList);
-        apiId = PublisherUtils.createAndPublishAPI(apiRequest, publisherRestClient);
+        String targetDir = Utils.getTargetDirPath();
+        String filePath = targetDir + ApictlUtils.OPENAPIS_PATH + "api_key_openAPI.yaml";
+        apiId = PublisherUtils.createAPIUsingOAS(SAMPLE_API_NAME, SAMPLE_API_CONTEXT,
+                SAMPLE_API_VERSION, user.getUserName(), filePath, publisherRestClient);
+
+        publisherRestClient.changeAPILifeCycleStatus(apiId, "Publish");
 
         //Create and subscribe to app
         Application app = new Application(APP_NAME, TestConstant.APPLICATION_TIER.UNLIMITED);
-        AppWithConsumerKey appWithConsumerKey = StoreUtils.createApplicationWithKeys(app, storeRestClient);
-        applicationId = appWithConsumerKey.getApplicationId();
+        applicationId = StoreUtils.createApplication(app, storeRestClient);
+
+        PublisherUtils.createAPIRevisionAndDeploy(apiId, publisherRestClient);
+
         StoreUtils.subscribeToAPI(apiId, applicationId, TestConstant.SUBSCRIPTION_TIER.UNLIMITED, storeRestClient);
 
-        endPoint = Utils.getServiceURLHttps(SAMPLE_API_CONTEXT + "/1.0.0/pet/findByStatus");
+        endPoint = Utils.getServiceURLHttps(SAMPLE_API_CONTEXT + "/1.0.0/pet/1");
 
         // Obtain internal key
         ApiResponse<org.wso2.am.integration.clients.publisher.api.v1.dto.APIKeyDTO> internalApiKeyDTO =
@@ -87,7 +88,7 @@ public class APIKeyHeaderTestCase extends ApimBaseTest {
     @Test(description = "Test to check the API Key in header is working")
     public void invokeAPIKeyWithSimilarHeaderSuccessTest() throws Exception {
         Map<String, String> headers = new HashMap<>();
-        headers.put("api_key", apiKey);
+        headers.put("x-api-key", apiKey);
         HttpResponse response = HttpClientRequest.doGet(Utils.getServiceURLHttps(endPoint), headers);
 
         Assert.assertNotNull(response);
@@ -100,7 +101,7 @@ public class APIKeyHeaderTestCase extends ApimBaseTest {
     public void invokeInternalAPIKeyWithSimilarHeaderSuccessTest() throws Exception {
         // Set header
         Map<String, String> headers = new HashMap<>();
-        headers.put("api_key", internalKey);
+        headers.put("x-api-key", internalKey);
         HttpResponse response = HttpsClientRequest.doGet(Utils.getServiceURLHttps(endPoint), headers);
 
         Assert.assertNotNull(response);

@@ -25,9 +25,9 @@ const (
 
 // Constants for OpenAPI vendor extension keys
 const (
-	productionEndpoints  string = "x-wso2-production-endpoints"
-	sandboxEndpoints     string = "x-wso2-sandbox-endpoints"
-	xWso2endpoints       string = "x-wso2-endpoint"
+	xWso2ProdEndpoints   string = "x-wso2-production-endpoints"
+	xWso2SandbxEndpoints string = "x-wso2-sandbox-endpoints"
+	xWso2endpoints       string = "x-wso2-endpoints"
 	xWso2BasePath        string = "x-wso2-basePath"
 	xWso2Label           string = "x-wso2-label"
 	xWso2Cors            string = "x-wso2-cors"
@@ -38,16 +38,17 @@ const (
 	xWso2DisableSecurity string = "x-wso2-disable-security"
 	None                 string = "None"
 	DefaultSecurity      string = "default"
+	LoadBalance          string = "loadbalance"
+	FailOver             string = "failover"
 )
 
 // sub-property keys mentioned under x-wso2-request-interceptor and x-wso2-response-interceptor
 const (
 	host           string = "host"
 	port           string = "port"
-	urlType        string = "urlType"
+	scheme         string = "scheme"
 	clusterTimeout string = "clusterTimeout"
 	requestTimeout string = "requestTimeout"
-	path           string = "path"
 	includes       string = "includes"
 )
 

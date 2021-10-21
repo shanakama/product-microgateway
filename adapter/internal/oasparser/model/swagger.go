@@ -19,6 +19,7 @@ package model
 
 import (
 	"errors"
+
 	"github.com/go-openapi/spec"
 	"github.com/google/uuid"
 	logger "github.com/wso2/product-microgateway/adapter/internal/loggers"
@@ -44,7 +45,7 @@ func (swagger *MgwSwagger) SetInfoSwagger(swagger2 spec.Swagger) error {
 	swagger.resources = setResourcesSwagger(swagger2)
 	swagger.apiType = HTTP
 	swagger.xWso2Basepath = swagger2.BasePath
-
+	swagger.securityScheme = setSecurityDefinitions(swagger2)
 	// According to the definition, multiple schemes can be mentioned. Since the microgateway can assign only one scheme
 	// https is prioritized over http. If it is ws or wss, the microgateway will print an error.
 	// If the schemes property is not mentioned at all, http will be assigned. (Only swagger 2 version has this property)
@@ -65,7 +66,8 @@ func (swagger *MgwSwagger) SetInfoSwagger(swagger2 spec.Swagger) error {
 		}
 		endpoint, err := getHostandBasepathandPort(urlScheme + swagger2.Host + swagger2.BasePath)
 		if err == nil {
-			swagger.productionUrls = append(swagger.productionUrls, *endpoint)
+			productionEndpoints := append([]Endpoint{}, *endpoint)
+			swagger.productionEndpoints = generateEndpointCluster(xWso2ProdEndpoints, productionEndpoints, LoadBalance)
 		} else {
 			return errors.New("error encountered when parsing the endpoint")
 		}
@@ -149,6 +151,17 @@ func setResourcesSwagger(swagger2 spec.Swagger) []Resource {
 	return SortResources(resources)
 }
 
+// Sets security definitions defined in swagger 2 format.
+func setSecurityDefinitions(swagger2 spec.Swagger) []SecurityScheme {
+	var securitySchemes []SecurityScheme
+	for key , val := range swagger2.SecurityDefinitions {
+		scheme := SecurityScheme{DefinitionName: key, Type: val.Type , Name: val.Name, In: val.In}
+		securitySchemes = append(securitySchemes, scheme)
+	}
+	logger.LoggerOasparser.Debugf("Security schemes in setSecurityDefinitions  %v:",securitySchemes)
+	return securitySchemes
+}
+
 // This methods adds x-wso2-disable-security vendor extension
 // if it's not present in the given vendor extensions.
 func addResourceLevelDisableSecurity(v *spec.VendorExtensible, enable bool) {
@@ -182,41 +195,68 @@ func setOperationSwagger(path string, methods []Operation, pathItem spec.PathIte
 
 //SetInfoSwaggerWebSocket populates the mgwSwagger object for web sockets
 // TODO - (VirajSalaka) read cors config and populate mgwSwagger feild
-func (swagger *MgwSwagger) SetInfoSwaggerWebSocket(apiData map[string]interface{}) error {
+func (swagger *MgwSwagger) SetInfoSwaggerWebSocket(apiData APIYaml) error {
 
-	data := apiData["data"].(map[string]interface{})
+	data := apiData.Data
 	// UUID in the generated api.yaml file is considerd as swagger.id
-	swagger.id = data["id"].(string)
+	swagger.id = data.ID
 	// Set apiType as WS for websockets
 	swagger.apiType = "WS"
 	// name and version in api.yaml corresponds to title and version respectively.
-	swagger.title = data["name"].(string)
-	swagger.version = data["version"].(string)
+	swagger.title = data.Name
+	swagger.version = data.Version
 	// context value in api.yaml is assigned as xWso2Basepath
-	swagger.xWso2Basepath = data["context"].(string) + "/" + swagger.version
+	swagger.xWso2Basepath = data.Context + "/" + swagger.version
 
 	// productionURL & sandBoxURL values are extracted from endpointConfig in api.yaml
-	endpointConfig := data["endpointConfig"].(map[string]interface{})
-	if endpointConfig["sandbox_endpoints"] != nil {
-		sandboxEndpoints := endpointConfig["sandbox_endpoints"].(map[string]interface{})
-		sandBoxURL := sandboxEndpoints["url"].(string)
-		sandBoxEndpoint, err := getHostandBasepathandPortWebSocket(sandBoxURL)
-		if err == nil {
-			swagger.sandboxUrls = append(swagger.sandboxUrls, *sandBoxEndpoint)
-		} else {
-			return err
+	endpointConfig := data.EndpointConfig
+	if len(endpointConfig.SandBoxEndpoints) > 0 {
+		var endpoints []Endpoint
+		endpointType := LoadBalance
+		for _, endpointConfig := range endpointConfig.SandBoxEndpoints {
+			sandBoxEndpoint, err := getHostandBasepathandPortWebSocket(endpointConfig.Endpoint)
+			if err == nil {
+				endpoints = append(endpoints, *sandBoxEndpoint)
+			} else {
+				return err
+			}
 		}
-	}
-	if endpointConfig["production_endpoints"] != nil {
-		productionEndpoints := endpointConfig["production_endpoints"].(map[string]interface{})
-		productionURL := productionEndpoints["url"].(string)
-		productionEndpoint, err := getHostandBasepathandPortWebSocket(productionURL)
-		if err == nil {
-			swagger.productionUrls = append(swagger.productionUrls, *productionEndpoint)
-		} else {
-			return err
+		if len(endpointConfig.SandboxFailoverEndpoints) > 0 {
+			for _, endpointConfig := range endpointConfig.SandboxFailoverEndpoints {
+				failoverEndpoint, err := getHostandBasepathandPortWebSocket(endpointConfig.Endpoint)
+				if err == nil {
+					endpointType = FailOver
+					endpoints = append(endpoints, *failoverEndpoint)
+				} else {
+					return err
+				}
+			}
 		}
+		swagger.sandboxEndpoints = generateEndpointCluster(xWso2SandbxEndpoints, endpoints, endpointType)
 	}
-
+	if len(endpointConfig.ProductionEndpoints) > 0 {
+		var endpoints []Endpoint
+		endpointType := LoadBalance
+		for _, endpointConfig := range endpointConfig.ProductionEndpoints {
+			prodEndpoint, err := getHostandBasepathandPortWebSocket(endpointConfig.Endpoint)
+			if err == nil {
+				endpoints = append(endpoints, *prodEndpoint)
+			} else {
+				return err
+			}
+		}
+		if len(endpointConfig.ProductionFailoverEndpoints) > 0 {
+			for _, endpointConfig := range endpointConfig.ProductionFailoverEndpoints {
+				failoverEndpoint, err := getHostandBasepathandPortWebSocket(endpointConfig.Endpoint)
+				if err == nil {
+					endpointType = FailOver
+					endpoints = append(endpoints, *failoverEndpoint)
+				} else {
+					return err
+				}
+			}
+		}
+		swagger.productionEndpoints = generateEndpointCluster(xWso2ProdEndpoints, endpoints, endpointType)
+	}
 	return nil
 }

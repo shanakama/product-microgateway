@@ -69,12 +69,14 @@ func (swagger *MgwSwagger) SetInfoOpenAPI(swagger3 openapi3.Swagger) error {
 	}
 
 	swagger.vendorExtensions = convertExtensibletoReadableFormat(swagger3.ExtensionProps)
+	swagger.securityScheme = setSecuritySchemesOpenAPI(swagger3)
 	swagger.resources, err = setResourcesOpenAPI(swagger3)
 	if err != nil {
 		return err
 	}
 
 	swagger.apiType = HTTP
+	var productionUrls []Endpoint
 	if isServerURLIsAvailable(swagger3.Servers) {
 		for _, serverEntry := range swagger3.Servers {
 			if len(serverEntry.URL) == 0 || strings.HasPrefix(serverEntry.URL, "/") {
@@ -82,11 +84,14 @@ func (swagger *MgwSwagger) SetInfoOpenAPI(swagger3 openapi3.Swagger) error {
 			}
 			endpoint, err := getHostandBasepathandPort(serverEntry.URL)
 			if err == nil {
-				swagger.productionUrls = append(swagger.productionUrls, *endpoint)
+				productionUrls = append(productionUrls, *endpoint)
 				swagger.xWso2Basepath = endpoint.Basepath
 			} else {
 				logger.LoggerOasparser.Errorf("error encountered when parsing the endpoint under openAPI servers object")
 			}
+		}
+		if productionUrls != nil && len(productionUrls) > 0 {
+			swagger.productionEndpoints = generateEndpointCluster(xWso2ProdEndpoints, productionUrls, LoadBalance)
 		}
 	}
 	return nil
@@ -133,6 +138,7 @@ func setResourcesOpenAPI(openAPI openapi3.Swagger) ([]Resource, error) {
 			}
 
 			resource := setPathInfoOpenAPI(path, methodsArray, pathItem)
+			var productionUrls []Endpoint
 			if isServerURLIsAvailable(pathItem.Servers) {
 				for _, serverEntry := range pathItem.Servers {
 					if len(serverEntry.URL) == 0 || strings.HasPrefix(serverEntry.URL, "/") {
@@ -140,11 +146,15 @@ func setResourcesOpenAPI(openAPI openapi3.Swagger) ([]Resource, error) {
 					}
 					endpoint, err := getHostandBasepathandPort(serverEntry.URL)
 					if err == nil {
-						resource.productionUrls = append(resource.productionUrls, *endpoint)
+						productionUrls = append(productionUrls, *endpoint)
+
 					} else {
 						logger.LoggerOasparser.Errorf("error encountered when parsing the endpoint under openAPI servers object")
 					}
 
+				}
+				if productionUrls != nil && len(productionUrls) > 0 {
+					resource.productionEndpoints = generateEndpointCluster(xWso2ProdEndpoints, productionUrls, LoadBalance)
 				}
 			}
 			resources = append(resources, resource)
@@ -152,6 +162,16 @@ func setResourcesOpenAPI(openAPI openapi3.Swagger) ([]Resource, error) {
 		}
 	}
 	return SortResources(resources), nil
+}
+
+func setSecuritySchemesOpenAPI(openAPI openapi3.Swagger) ([]SecurityScheme) {
+	var securitySchemes []SecurityScheme
+	for key, val := range openAPI.Components.SecuritySchemes {
+		scheme := SecurityScheme{DefinitionName: key, Type: val.Value.Type, Name: val.Value.Name, In: val.Value.In}
+		securitySchemes = append(securitySchemes, scheme)
+	}
+	logger.LoggerOasparser.Debugf("Security schemes in  setSecuritySchemesOpenAPI method %v:",securitySchemes)
+	return securitySchemes
 }
 
 func getOperationLevelDetails(operation *openapi3.Operation, method string) Operation {

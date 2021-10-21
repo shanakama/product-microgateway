@@ -33,10 +33,12 @@ import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.wso2.carbon.apimgt.common.gateway.constants.JWTConstants;
 import org.wso2.carbon.apimgt.common.gateway.dto.JWTInfoDto;
 import org.wso2.carbon.apimgt.common.gateway.dto.JWTValidationInfo;
-import org.wso2.choreo.connect.commons.model.AuthenticationContext;
-import org.wso2.choreo.connect.commons.model.RequestContext;
+import org.wso2.choreo.connect.enforcer.commons.model.AuthenticationContext;
+import org.wso2.choreo.connect.enforcer.commons.model.RequestContext;
+import org.wso2.choreo.connect.enforcer.commons.model.SecuritySchemaConfig;
 import org.wso2.choreo.connect.enforcer.config.ConfigHolder;
 import org.wso2.choreo.connect.enforcer.config.dto.AuthHeaderDto;
 import org.wso2.choreo.connect.enforcer.constants.APIConstants;
@@ -349,6 +351,17 @@ public class FilterUtils {
     private static void constructJWTContent(JSONObject subscribedAPI,
                                             APIKeyValidationInfoDTO apiKeyValidationInfoDTO, JWTInfoDto jwtInfoDto) {
 
+        Map<String, Object> claims = getClaimsFromJWTValidationInfo(jwtInfoDto);
+        if (claims != null) {
+            if (claims.get(JWTConstants.SUB) != null) {
+                String sub = (String) claims.get(JWTConstants.SUB);
+                jwtInfoDto.setSub(sub);
+            }
+            if (claims.get(JWTConstants.ORGANIZATIONS) != null) {
+                String[] organizations = (String[]) claims.get(JWTConstants.ORGANIZATIONS);
+                jwtInfoDto.setOrganizations(organizations);
+            }
+        }
         if (apiKeyValidationInfoDTO != null) {
             jwtInfoDto.setApplicationId(apiKeyValidationInfoDTO.getApplicationId());
             jwtInfoDto.setApplicationName(apiKeyValidationInfoDTO.getApplicationName());
@@ -370,8 +383,7 @@ public class FilterUtils {
             jwtInfoDto.setSubscriptionTier(subscriptionTier);
             jwtInfoDto.setEndUserTenantId(0);
 
-            Map<String, Object> claims = jwtInfoDto.getJwtValidationInfo().getClaims();
-            if (claims.get(JwtConstants.APPLICATION) != null) {
+            if (claims != null && claims.get(JwtConstants.APPLICATION) != null) {
                 JSONObject
                         applicationObj = (JSONObject) claims.get(JwtConstants.APPLICATION);
                 jwtInfoDto.setApplicationId(
@@ -384,6 +396,15 @@ public class FilterUtils {
             }
         }
     }
+
+    private static Map<String, Object> getClaimsFromJWTValidationInfo(JWTInfoDto jwtInfoDto) {
+
+        if (jwtInfoDto.getJwtValidationInfo() != null) {
+            return jwtInfoDto.getJwtValidationInfo().getClaims();
+        }
+        return null;
+    }
+
     /**
      * Set the error code, message and description to the request context. The enforcer response will
      * retrieve this error details from the request context. Make sure to call this method and set the proper error
@@ -533,12 +554,44 @@ public class FilterUtils {
         return authHeaderName.toLowerCase();
     }
 
-    public static String getAPIKeyHeaderName(RequestContext requestContext) {
-        String apiKeyHeader = "";
-        if (StringUtils.isEmpty(apiKeyHeader)) {
-            apiKeyHeader = APIConstants.API_SECURITY_API_KEY;
+    /**
+     * Gives the name used to define API key.
+     * @param requestContext Request context instance
+     * @return String to identify API key
+     */
+    public static String getAPIKeyName(RequestContext requestContext) {
+        SecuritySchemaConfig apiKeySecurityScheme = getAPIKeySchemeConfig(requestContext);
+        String apiKeyNameInDefinition = "";
+        if (apiKeySecurityScheme != null) {
+            apiKeyNameInDefinition = apiKeySecurityScheme.getName();
         }
-        return apiKeyHeader.toLowerCase();
+        return apiKeyNameInDefinition.toLowerCase();
+    }
+
+    /**
+     * Gives security scheme config relevant to API key.
+     * @param requestContext Request context instance
+     * @return Instance relevant to the security scheme config
+     */
+    public static SecuritySchemaConfig getAPIKeySchemeConfig(RequestContext requestContext) {
+        Map<String, SecuritySchemaConfig> securitySchemeDefinitions = requestContext.getMatchedAPI().
+                getSecuritySchemeDefinitions();
+        return  securitySchemeDefinitions.get(APIConstants.SWAGGER_API_KEY_AUTH_TYPE_NAME);
+    }
+
+    /**
+     * Gives arbitrary name used to define API key.
+     * @param securitySchemeDefinitions Map of security scheme definitions
+     * @return Arbitrary name used to define API key security scheme
+     */
+    public static String getAPIKeyArbitraryName(Map<String, SecuritySchemaConfig> securitySchemeDefinitions) {
+        String apiKeyArbitraryName = "";
+        SecuritySchemaConfig apiKeySecurityScheme = securitySchemeDefinitions.
+                get(APIConstants.SWAGGER_API_KEY_AUTH_TYPE_NAME);
+        if (apiKeySecurityScheme != null) {
+            return apiKeySecurityScheme.getDefinitionName();
+        }
+        return apiKeyArbitraryName;
     }
 
     /**

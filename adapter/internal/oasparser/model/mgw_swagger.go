@@ -26,6 +26,7 @@ import (
 
 	parser "github.com/mitchellh/mapstructure"
 	"github.com/wso2/product-microgateway/adapter/config"
+	"github.com/wso2/product-microgateway/adapter/internal/interceptor"
 	logger "github.com/wso2/product-microgateway/adapter/internal/loggers"
 	"github.com/wso2/product-microgateway/adapter/internal/svcdiscovery"
 )
@@ -36,44 +37,31 @@ import (
 // by the resources array which contains the MgwResource entries.
 type MgwSwagger struct {
 	id                  string
+	UUID                string
 	apiType             string
 	description         string
 	title               string
 	version             string
 	vendorExtensions    map[string]interface{}
-	productionUrls      []Endpoint //
-	sandboxUrls         []Endpoint
-	xWso2Endpoints      []EndpointCluster
+	productionEndpoints *EndpointCluster
+	sandboxEndpoints    *EndpointCluster
 	resources           []Resource
 	xWso2Basepath       string
 	xWso2Cors           *CorsConfig
-	securityScheme      []string
+	securityScheme      []SecurityScheme
 	xWso2ThrottlingTier string
 	xWso2AuthHeader     string
 	disableSecurity     bool
 	OrganizationID      string
 }
 
-// EndpointSecurity contains the SandBox/Production endpoint security
-type EndpointSecurity struct {
-	SandBox    SecurityInfo
-	Production SecurityInfo
-}
-
-// SecurityInfo contains the parameters of endpoint security
-type SecurityInfo struct {
-	Password         string
-	CustomParameters string
-	SecurityType     string
-	Enabled          bool
-	Username         string
-}
-
 // EndpointCluster represent an upstream cluster
 type EndpointCluster struct {
 	EndpointName string
 	Endpoints    []Endpoint
-	EndpointType string // enum allowing failover or loadbalance
+	// EndpointType enum {failover, loadbalance}. if any other value provided, consider as the default value; which is loadbalance
+	EndpointType string
+	EndpointConfig
 }
 
 // Endpoint represents the structure of an endpoint.
@@ -97,6 +85,38 @@ type Endpoint struct {
 	ServiceDiscoveryString string
 }
 
+// EndpointConfig holds the configs such as timeout, retry, etc. for the EndpointCluster
+type EndpointConfig struct {
+	RetryConfig
+}
+
+// RetryConfig holds the parameters for retries done by cc to the EndpointCluster
+type RetryConfig struct {
+	Count            int32
+	IntervalInMillis int32
+	BackOffFactor    float32
+	StatusCodes      []string
+}
+
+// SecurityScheme represents the structure of an security scheme.
+type SecurityScheme struct {
+	// Arbitrary name used to define security scheme
+	// ex: default, x-api-key etc.
+	DefinitionName string 
+
+	// Type of the security scheme
+	// Possible values are apiKey, oauth2
+	Type string
+
+	// Name of the security scheme
+	// User can define a specific name for above types
+	Name string
+
+	// Location of the api key 
+	// Valid values are query, header
+	In string
+}
+
 // CorsConfig represents the API level Cors Configuration
 type CorsConfig struct {
 	Enabled                       bool     `mapstructure:"corsConfigurationEnabled"`
@@ -109,18 +129,15 @@ type CorsConfig struct {
 
 // InterceptEndpoint contains the parameters of endpoint security
 type InterceptEndpoint struct {
-	Enable         bool
-	Host           string
-	URLType        string
-	Port           uint32
-	Path           string
-	ClusterName    string
-	ClusterTimeout time.Duration
-	RequestTimeout int
+	Enable          bool
+	EndpointCluster EndpointCluster
+	ClusterName     string
+	ClusterTimeout  time.Duration
+	RequestTimeout  time.Duration
 	// Includes this is an enum allowing only values in
 	// {"request_headers", "request_body", "request_trailer", "response_headers", "response_body", "response_trailer",
 	//"invocation_context" }
-	Includes []string
+	Includes *interceptor.RequestInclusions
 }
 
 // GetCorsConfig returns the CorsConfiguration Object.
@@ -155,13 +172,13 @@ func (swagger *MgwSwagger) GetVendorExtensions() map[string]interface{} {
 }
 
 // GetProdEndpoints returns the array of production endpoints.
-func (swagger *MgwSwagger) GetProdEndpoints() []Endpoint {
-	return swagger.productionUrls
+func (swagger *MgwSwagger) GetProdEndpoints() *EndpointCluster {
+	return swagger.productionEndpoints
 }
 
 // GetSandEndpoints returns the array of sandbox endpoints.
-func (swagger *MgwSwagger) GetSandEndpoints() []Endpoint {
-	return swagger.sandboxUrls
+func (swagger *MgwSwagger) GetSandEndpoints() *EndpointCluster {
+	return swagger.sandboxEndpoints
 }
 
 // GetResources returns the array of resources (openAPI path level info)
@@ -199,8 +216,8 @@ func (swagger *MgwSwagger) SetName(name string) {
 	swagger.title = name
 }
 
-// SetSecurityScheme sets the securityscheme of the API
-func (swagger *MgwSwagger) SetSecurityScheme(securityScheme []string) {
+// SetSecurityScheme sets the securityschemes of the API
+func (swagger *MgwSwagger) SetSecurityScheme(securityScheme []SecurityScheme) {
 	swagger.securityScheme = securityScheme
 }
 
@@ -221,8 +238,8 @@ func (swagger *MgwSwagger) GetXWSO2AuthHeader() string {
 	return swagger.xWso2AuthHeader
 }
 
-// GetSetSecurityScheme returns the securityscheme of the API
-func (swagger *MgwSwagger) GetSetSecurityScheme() []string {
+// GetSecurityScheme returns the securityschemes of the API
+func (swagger *MgwSwagger) GetSecurityScheme() []SecurityScheme {
 	return swagger.securityScheme
 }
 
@@ -257,47 +274,32 @@ func (swagger *MgwSwagger) SetXWso2Extensions() error {
 
 // SetXWso2SandboxEndpointForMgwSwagger set the MgwSwagger object with the SandboxEndpoint when
 // it is not populated by SetXWso2Extensions
-func (swagger *MgwSwagger) SetXWso2SandboxEndpointForMgwSwagger(sandBoxURL string) error {
-	var sandboxEndpoints []Endpoint
-	sandboxEndpoint, err := getHostandBasepathandPort(sandBoxURL)
-	if err == nil {
-		sandboxEndpoints = append(sandboxEndpoints, *sandboxEndpoint)
-		swagger.sandboxUrls = sandboxEndpoints
-		// Error nil for successful execution
-		return nil
-	}
-	return errors.New("invalid sandbox endpoint")
+func (swagger *MgwSwagger) SetXWso2SandboxEndpointForMgwSwagger(sandboxEndpoints []Endpoint) {
+	swagger.sandboxEndpoints = generateEndpointCluster(xWso2SandbxEndpoints, sandboxEndpoints, LoadBalance)
 }
 
 // SetXWso2ProductionEndpointMgwSwagger set the MgwSwagger object with the productionEndpoint when
 // it is not populated by SetXWso2Extensions
-func (swagger *MgwSwagger) SetXWso2ProductionEndpointMgwSwagger(productionURL string) error {
-	var productionEndpoints []Endpoint
-	productionEndpoint, err := getHostandBasepathandPort(productionURL)
-	if err == nil {
-		productionEndpoints = append(productionEndpoints, *productionEndpoint)
-		swagger.productionUrls = productionEndpoints
-		// Error nil for successful execution
-		return nil
-	}
-	return errors.New("invalid production endpoint")
+func (swagger *MgwSwagger) SetXWso2ProductionEndpointMgwSwagger(productionEndpoints []Endpoint) {
+	swagger.productionEndpoints = generateEndpointCluster(xWso2ProdEndpoints, productionEndpoints, LoadBalance)
 }
 
 func (swagger *MgwSwagger) setXWso2ProductionEndpoint() error {
-	xWso2APIEndpoints, err := getXWso2Endpoints(swagger.vendorExtensions, productionEndpoints)
-	if xWso2APIEndpoints != nil && len(xWso2APIEndpoints) > 0 {
-		swagger.productionUrls = xWso2APIEndpoints
+	xWso2APIEndpoints, err := getEndpoints(swagger.vendorExtensions, xWso2ProdEndpoints)
+	if xWso2APIEndpoints != nil {
+		swagger.productionEndpoints = xWso2APIEndpoints
 	} else if err != nil {
-		return errors.New("error encountered when extracting endpoints")
+		return errors.New("error encountered when extracting endpoints. " + err.Error())
 	}
 
 	//resources
 	for i, resource := range swagger.resources {
-		xwso2ResourceEndpoints, err := getXWso2Endpoints(resource.vendorExtensions, productionEndpoints)
+		xwso2ResourceEndpoints, err := getEndpoints(resource.vendorExtensions, xWso2ProdEndpoints)
 		if err != nil {
-			return err
+			return errors.New("error encountered when extracting resource endpoints for API with basepath: " +
+				swagger.xWso2Basepath + ". " + err.Error())
 		} else if xwso2ResourceEndpoints != nil {
-			swagger.resources[i].productionUrls = xwso2ResourceEndpoints
+			swagger.resources[i].productionEndpoints = xwso2ResourceEndpoints
 		}
 	}
 
@@ -305,20 +307,21 @@ func (swagger *MgwSwagger) setXWso2ProductionEndpoint() error {
 }
 
 func (swagger *MgwSwagger) setXWso2SandboxEndpoint() error {
-	xWso2APIEndpoints, err := getXWso2Endpoints(swagger.vendorExtensions, sandboxEndpoints)
-	if xWso2APIEndpoints != nil && len(xWso2APIEndpoints) > 0 {
-		swagger.sandboxUrls = xWso2APIEndpoints
+	xWso2APIEndpoints, err := getEndpoints(swagger.vendorExtensions, xWso2SandbxEndpoints)
+	if xWso2APIEndpoints != nil {
+		swagger.sandboxEndpoints = xWso2APIEndpoints
 	} else if err != nil {
 		return errors.New("error encountered when extracting endpoints")
 	}
 
 	// resources
 	for i, resource := range swagger.resources {
-		xwso2ResourceEndpoints, err := getXWso2Endpoints(resource.vendorExtensions, sandboxEndpoints)
+		xwso2ResourceEndpoints, err := getEndpoints(resource.vendorExtensions, xWso2SandbxEndpoints)
 		if err != nil {
-			return err
+			return errors.New("error encountered when extracting resource endpoints for API with basepath: " +
+				swagger.xWso2Basepath + ". " + err.Error())
 		} else if xwso2ResourceEndpoints != nil {
-			swagger.resources[i].sandboxUrls = xwso2ResourceEndpoints
+			swagger.resources[i].sandboxEndpoints = xwso2ResourceEndpoints
 		}
 	}
 
@@ -326,27 +329,15 @@ func (swagger *MgwSwagger) setXWso2SandboxEndpoint() error {
 }
 
 // GetXWso2Endpoints get x-wso2-endpoints
-func (swagger *MgwSwagger) GetXWso2Endpoints() ([]EndpointCluster, error) {
-	var endpointClusters []EndpointCluster
+func (swagger *MgwSwagger) GetXWso2Endpoints() ([]*EndpointCluster, error) {
+	var endpointClusters []*EndpointCluster
 	if val, found := swagger.vendorExtensions[xWso2endpoints]; found {
 		if val1, ok := val.([]interface{}); ok {
 			for _, val2 := range val1 { // loop thorough multiple endpoints
 				if eps, ok := val2.(map[string]interface{}); ok {
 					for epName := range eps { // epName is endpoint's name
-						endpoints, err := getXWso2Endpoints(eps, epName)
-						endpointCluster := EndpointCluster{
-							EndpointName: epName,
-							Endpoints:    endpoints,
-							EndpointType: "loadbalance",
-						}
-						if epValues, ok := eps[epName].(map[string]interface{}); ok {
-							if val3, found := epValues[typeConst]; found {
-								if epType, ok := val3.(string); ok {
-									endpointCluster.EndpointType = epType
-								}
-							}
-						}
-						if err == nil && endpoints != nil && len(endpoints) > 0 {
+						endpointCluster, err := getEndpoints(eps, epName)
+						if err == nil && endpointCluster != nil {
 							endpointClusters = append(endpointClusters, endpointCluster)
 						} else if err != nil {
 							return endpointClusters, errors.New("error encountered when extracting x-wso2-endpoints")
@@ -395,13 +386,15 @@ func (swagger *MgwSwagger) setDisableSecurity() {
 // Validate method confirms that the mgwSwagger has all required fields in the required format.
 // This needs to be checked prior to generate router/enforcer related resources.
 func (swagger *MgwSwagger) Validate() error {
-	if len(swagger.productionUrls) == 0 && len(swagger.sandboxUrls) == 0 {
+	if (swagger.productionEndpoints == nil || len(swagger.productionEndpoints.Endpoints) == 0) &&
+		(swagger.sandboxEndpoints == nil || len(swagger.sandboxEndpoints.Endpoints) == 0) {
+
 		logger.LoggerOasparser.Errorf("No Endpoints are provided for the API %s:%s",
 			swagger.title, swagger.version)
-		return errors.New("No Endpoints are provided for the API")
+		return errors.New("no endpoints are provided for the API")
 	}
-	if len(swagger.productionUrls) > 0 {
-		err := swagger.productionUrls[0].validateEndpoint()
+	if swagger.productionEndpoints != nil && len(swagger.productionEndpoints.Endpoints) > 0 {
+		err := swagger.productionEndpoints.Endpoints[0].validateEndpoint()
 		if err != nil {
 			logger.LoggerOasparser.Errorf("Error while parsing the production endpoints of the API %s:%s - %v",
 				swagger.title, swagger.version, err)
@@ -409,8 +402,8 @@ func (swagger *MgwSwagger) Validate() error {
 		}
 	}
 
-	if len(swagger.sandboxUrls) > 0 {
-		err := swagger.sandboxUrls[0].validateEndpoint()
+	if swagger.sandboxEndpoints != nil && len(swagger.sandboxEndpoints.Endpoints) > 0 {
+		err := swagger.sandboxEndpoints.Endpoints[0].validateEndpoint()
 		if err != nil {
 			logger.LoggerOasparser.Errorf("Error while parsing the sandbox endpoints of the API %s:%s - %v",
 				swagger.title, swagger.version, err)
@@ -428,8 +421,8 @@ func (swagger *MgwSwagger) Validate() error {
 
 func (swagger *MgwSwagger) validateBasePath() error {
 	if xWso2BasePath == "" {
-		return errors.New("Empty Basepath is provided. Either use x-wso2-basePath extension or assign basePath (if OpenAPI v2 definition is used)" +
-			" / servers entry (if OpenAPI v3 definition is used) with non empty context.")
+		return errors.New("empty Basepath is provided. Either use x-wso2-basePath extension or assign basePath (if OpenAPI v2 definition is used)" +
+			" / servers entry (if OpenAPI v3 definition is used) with non empty context")
 	}
 	return nil
 }
@@ -439,66 +432,96 @@ func (endpoint *Endpoint) validateEndpoint() error {
 		return nil
 	}
 	if endpoint.Port == 0 || endpoint.Port > 65535 {
-		return errors.New("Endpoint port value should be between 0 and 65535")
+		return errors.New("endpoint port value should be between 0 and 65535")
 	}
 	if len(endpoint.Host) == 0 {
-		return errors.New("Empty Hostname is provided")
+		return errors.New("empty Hostname is provided")
 	}
 	if strings.HasPrefix(endpoint.Host, "/") {
-		return errors.New("Relative paths are not supported as endpoint URLs")
+		return errors.New("relative paths are not supported as endpoint URLs")
 	}
 	urlString := endpoint.URLType + "://" + endpoint.Host
 	_, err := url.ParseRequestURI(urlString)
 	return err
 }
 
-// getXWso2Endpoints extracts and generate the Endpoint Objects from the vendor extension map.
-func getXWso2Endpoints(vendorExtensions map[string]interface{}, endpointType string) ([]Endpoint, error) {
-	var endpoints []Endpoint
-
+// getEndpoints extracts and generate the EndpointCluster Object from any yaml map that has the following structure
+//   endpoint-name:
+// 		urls:
+// 			- <endpoint-URL-1>
+// 			- <endpoint-URL-2>
+//		type: <loadbalance or failover>
+//		advanceEndpointConfig:
+//			<the configs>
+func getEndpoints(vendorExtensions map[string]interface{}, endpointName string) (*EndpointCluster, error) {
+	endpointCluster := EndpointCluster{
+		EndpointName: endpointName,
+	}
 	// TODO: (VirajSalaka) x-wso2-production-endpoint 's type does not represent http/https, instead it indicates loadbalance and failover
-	if y, found := vendorExtensions[endpointType]; found {
-		if val, ok := y.(map[string]interface{}); ok {
-			urlsProperty, ok := val[urls]
-			if !ok {
-				// TODO: (VirajSalaka) Throw an error and catch from an upper layer where the API name is visible.
-				logger.LoggerOasparser.Error("urls property is not provided with the x-wso2-production-endpoints/" +
-					"x-wso2-sandbox-endpoints extension.")
-			} else {
-				castedUrlsInterface := urlsProperty.([]interface{})
-				for _, v := range castedUrlsInterface {
-					if svcdiscovery.IsServiceDiscoveryEnabled && svcdiscovery.IsDiscoveryServiceEndpoint(v.(string)) {
-						logger.LoggerOasparser.Debug("consul query syntax found: ", v.(string))
-						queryString, defHost, err := svcdiscovery.ParseConsulSyntax(v.(string))
-						if err != nil {
-							logger.LoggerOasparser.Error("consul syntax parse error ", err)
-							continue
-						}
-						endpoint, err := getHostandBasepathandPort(defHost)
-						if err == nil {
-							endpoint.ServiceDiscoveryString = queryString
-							endpoints = append(endpoints, *endpoint)
-						} else {
-							return nil, err
-						}
-					} else {
-						endpoint, err := getHostandBasepathandPort(v.(string))
-						if err == nil {
-							endpoints = append(endpoints, *endpoint)
-						} else {
-							return nil, err
-						}
+	if endpointClusterYaml, found := vendorExtensions[endpointName]; found {
+		if endpointClusterMap, ok := endpointClusterYaml.(map[string]interface{}); ok {
+			// Set URLs
+			if urlsProperty, found := endpointClusterMap[urls]; found {
+				if urlsArray, ok := urlsProperty.([]interface{}); ok {
+					endpoints, err := processEndpointUrls(urlsArray)
+					if err != nil {
+						return nil, err
 					}
-
+					endpointCluster.Endpoints = endpoints
+					endpointCluster.EndpointType = LoadBalance
+				} else {
+					return nil, errors.New("Error while parsing array of urls in " + endpointName)
 				}
-				return endpoints, nil
+			} else {
+				// TODO: (VirajSalaka) Throw an error and catch from an upper layer where the API name is visible.
+				errMsg := "urls property is not provided with the " + endpointName + " extension"
+				logger.LoggerOasparser.Error(errMsg)
+				return nil, errors.New(errMsg)
+			}
+
+			// Update Endpoint Cluster type
+			if epType, found := endpointClusterMap[typeConst]; found {
+				if endpointType, ok := epType.(string); ok {
+					endpointCluster.EndpointType = endpointType
+				}
+			}
+			// Set Endpoint Config
+
+			return &endpointCluster, nil
+		}
+		logger.LoggerOasparser.Errorf("%v OpenAPI extension does not adhere with the schema", endpointName)
+		return nil, errors.New("invalid map structure detected")
+	}
+	return nil, nil // the vendor extension for prod or sandbox just isn't present
+}
+
+func processEndpointUrls(urlsArray []interface{}) ([]Endpoint, error) {
+	var endpoints []Endpoint
+	for _, v := range urlsArray {
+		if svcdiscovery.IsServiceDiscoveryEnabled && svcdiscovery.IsDiscoveryServiceEndpoint(v.(string)) {
+			logger.LoggerOasparser.Debug("Consul query syntax found: ", v.(string))
+			queryString, defHost, err := svcdiscovery.ParseConsulSyntax(v.(string))
+			if err != nil {
+				logger.LoggerOasparser.Error("Consul syntax parse error ", err)
+				continue
+			}
+			endpoint, err := getHostandBasepathandPort(defHost)
+			if err == nil {
+				endpoint.ServiceDiscoveryString = queryString
+				endpoints = append(endpoints, *endpoint)
+			} else {
+				return nil, err
 			}
 		} else {
-			logger.LoggerOasparser.Error("x-wso2-production/sandbox-endpoints is not having a correct map structure")
-			return nil, errors.New("invalid map structure detected")
+			endpoint, err := getHostandBasepathandPort(v.(string))
+			if err == nil {
+				endpoints = append(endpoints, *endpoint)
+			} else {
+				return nil, err
+			}
 		}
 	}
-	return nil, nil
+	return endpoints, nil
 }
 
 // getXWso2Basepath extracts the value of xWso2BasePath extension.
@@ -545,6 +568,18 @@ func (swagger *MgwSwagger) setXWso2Cors() {
 	} else {
 		swagger.xWso2Cors = generateGlobalCors()
 	}
+}
+
+func generateEndpointCluster(endpointName string, endpoints []Endpoint, endpointType string) *EndpointCluster {
+	if len(endpoints) > 0 {
+		endpointCluster := EndpointCluster{
+			EndpointName: endpointName,
+			Endpoints:    endpoints,
+			EndpointType: endpointType,
+		}
+		return &endpointCluster
+	}
+	return nil
 }
 
 func generateGlobalCors() *CorsConfig {
@@ -609,14 +644,20 @@ func ResolveDisableSecurity(vendorExtensions map[string]interface{}) bool {
 
 //GetInterceptor returns interceptors
 func (swagger *MgwSwagger) GetInterceptor(vendorExtensions map[string]interface{}, extensionName string) (InterceptEndpoint, error) {
-	urlV := "http"
+	endpointCluster := EndpointCluster{
+		//only 1 endpoint supported for interceptor's endpoint cluster
+		Endpoints: []Endpoint{
+			{
+				Host:    "",
+				URLType: "http",
+				Port:    uint32(80),
+			},
+		},
+	}
 	conf, _ := config.ReadConfigs()
 	clusterTimeoutV := conf.Envoy.ClusterTimeoutInSeconds
-	requestTimeoutV := 30
-	pathV := "/"
-	hostV := ""
-	portV := uint32(80)
-	var includesV []string
+	requestTimeoutV := conf.Envoy.ClusterTimeoutInSeconds
+	includesV := &interceptor.RequestInclusions{}
 
 	var err error
 
@@ -624,24 +665,24 @@ func (swagger *MgwSwagger) GetInterceptor(vendorExtensions map[string]interface{
 		if val, ok := x.(map[string]interface{}); ok {
 			//host mandatory
 			if v, found := val[host]; found {
-				hostV = v.(string)
+				endpointCluster.Endpoints[0].Host = v.(string)
 			} else {
-				logger.LoggerOasparser.Error("error reading interceptors host value")
+				logger.LoggerOasparser.Error("Error reading interceptors host value")
 				return InterceptEndpoint{}, errors.New("error reading interceptors host value")
 			}
 			// port mandatory
 			if v, found := val[port]; found {
 				p, err := strconv.ParseUint(fmt.Sprint(v), 10, 32)
 				if err == nil {
-					portV = uint32(p)
+					endpointCluster.Endpoints[0].Port = uint32(p)
 				} else {
-					logger.LoggerOasparser.Error("error reading interceptors port value", err)
+					logger.LoggerOasparser.Error("Error reading interceptors port value", err)
 					return InterceptEndpoint{}, errors.New("error reading interceptors port value")
 				}
 			}
 			//urlType optional
-			if v, found := val[urlType]; found {
-				urlV = v.(string)
+			if v, found := val[scheme]; found {
+				endpointCluster.Endpoints[0].URLType = v.(string)
 			}
 			//clusterTimeout optional
 			if v, found := val[clusterTimeout]; found {
@@ -649,7 +690,7 @@ func (swagger *MgwSwagger) GetInterceptor(vendorExtensions map[string]interface{
 				if err == nil {
 					clusterTimeoutV = time.Duration(p)
 				} else {
-					logger.LoggerOasparser.Error("error reading interceptors port value", err)
+					logger.LoggerOasparser.Error("Error reading interceptors port value", err)
 					return InterceptEndpoint{}, errors.New("error reading interceptors port value")
 				}
 			}
@@ -657,15 +698,11 @@ func (swagger *MgwSwagger) GetInterceptor(vendorExtensions map[string]interface{
 			if v, found := val[requestTimeout]; found {
 				p, err := strconv.ParseInt(fmt.Sprint(v), 0, 0)
 				if err == nil {
-					requestTimeoutV = int(p)
+					requestTimeoutV = time.Duration(p)
 				} else {
-					logger.LoggerOasparser.Error("error reading interceptors port value", err)
+					logger.LoggerOasparser.Error("Error reading interceptors port value", err)
 					return InterceptEndpoint{}, errors.New("error reading interceptors port value")
 				}
-			}
-			// path optional
-			if v, found := val[path]; found {
-				pathV = v.(string)
 			}
 			//includes optional
 			if v, found := val[includes]; found {
@@ -673,23 +710,31 @@ func (swagger *MgwSwagger) GetInterceptor(vendorExtensions map[string]interface{
 				if len(includes) > 0 {
 					for _, include := range includes {
 						switch include.(string) {
-						case "request_headers", "request_body", "request_trailer", "response_headers", "response_body",
-							"response_trailer", "invocation_context":
-							includesV = append(includesV, include.(string))
+						case "request_headers":
+							includesV.RequestHeaders = true
+						case "request_body":
+							includesV.RequestBody = true
+						case "request_trailers":
+							includesV.RequestTrailer = true
+						case "response_headers":
+							includesV.ResponseHeaders = true
+						case "response_body":
+							includesV.ResponseBody = true
+						case "response_trailers":
+							includesV.ResponseTrailers = true
+						case "invocation_context":
+							includesV.InvocationContext = true
 						}
 					}
 				}
 			}
 
 			return InterceptEndpoint{
-				Enable:         true,
-				Host:           hostV,
-				URLType:        urlV,
-				Port:           portV,
-				ClusterTimeout: clusterTimeoutV,
-				RequestTimeout: requestTimeoutV,
-				Path:           pathV,
-				Includes:       includesV,
+				Enable:          true,
+				EndpointCluster: endpointCluster,
+				ClusterTimeout:  clusterTimeoutV,
+				RequestTimeout:  requestTimeoutV,
+				Includes:        includesV,
 			}, err
 		}
 		return InterceptEndpoint{}, errors.New("error parsing response interceptors values to mgwSwagger")
