@@ -82,6 +82,9 @@ func TestSetResourcesOpenAPI(t *testing.T) {
 		result  []Resource
 		message string
 	}
+
+	securitySchemes := []SecurityScheme{}
+
 	dataItems := []setResourcesTestItem{
 		{
 			openapi3.Swagger{
@@ -115,7 +118,7 @@ func TestSetResourcesOpenAPI(t *testing.T) {
 		},
 	}
 	for _, item := range dataItems {
-		resultResources, err := setResourcesOpenAPI(item.input)
+		resultResources, err := setResourcesOpenAPI(item.input, &securitySchemes)
 		assert.Nil(t, err, "No error should be encountered when setting resources")
 		if item.result != nil {
 			assert.Equal(t, item.result[0].path, resultResources[0].GetPath(), item.message)
@@ -143,6 +146,7 @@ func TestGetHostandBasepathandPort(t *testing.T) {
 				Basepath: "/api/v2",
 				Port:     8000,
 				URLType:  "https",
+				RawURL:   "https://petstore.io:8000/api/v2",
 			},
 			message: "all the details are provided in the endpoint",
 		},
@@ -153,6 +157,7 @@ func TestGetHostandBasepathandPort(t *testing.T) {
 				Basepath: "/api/v2",
 				Port:     8000,
 				URLType:  "https",
+				RawURL:   "https://petstore.io:8000/api/v2",
 			},
 			message: "when port is not provided", //here should find a way to readi configs in tests
 		},
@@ -163,6 +168,7 @@ func TestGetHostandBasepathandPort(t *testing.T) {
 				Basepath: "/api/v2",
 				Port:     8000,
 				URLType:  "http",
+				RawURL:   "http://petstore.io:8000/api/v2",
 			},
 			message: "when protocol is not provided",
 		},

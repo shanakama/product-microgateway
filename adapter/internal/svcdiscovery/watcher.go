@@ -79,8 +79,8 @@ func init() {
 	ServiceConsulMeshMap = make(map[string]bool)
 	//Read config
 	conf, errConfLoad = config.ReadConfigs()
-	IsServiceDiscoveryEnabled = conf.Adapter.Consul.Enable
-	aclToken = strings.TrimSpace(aclToken)
+	IsServiceDiscoveryEnabled = conf.Adapter.Consul.Enabled
+	aclToken = strings.TrimSpace(conf.Adapter.Consul.ACLToken)
 	mgwServiceName = conf.Adapter.Consul.MgwServiceName
 	MeshEnabled = conf.Adapter.Consul.ServiceMeshEnabled
 	MeshUpdateSignal = make(chan bool)
@@ -169,6 +169,12 @@ func InitConsul() {
 			client := newHTTPClient(&transport, pollInterval)
 			longPollClient := newHTTPClient(&transport, time.Duration(longPollInterval*2)*time.Second)
 			ConsulClientInstance = NewConsulClient(client, longPollClient, urlStructure.Scheme, urlStructure.Host, aclToken)
+
+			if conf.Adapter.Consul.ServiceMeshEnabled {
+				ConsulClientInstance.LongPollRootCert(MeshUpdateSignal)
+				ConsulClientInstance.LongPollServiceCertAndKey(MeshUpdateSignal)
+			}
+
 		}
 	})
 }

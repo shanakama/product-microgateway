@@ -23,16 +23,16 @@ import (
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
+	logger "github.com/wso2/product-microgateway/adapter/internal/loggers"
 	envoy "github.com/wso2/product-microgateway/adapter/internal/oasparser/envoyconf"
 	"github.com/wso2/product-microgateway/adapter/internal/oasparser/model"
 	mgw "github.com/wso2/product-microgateway/adapter/internal/oasparser/model"
 	"github.com/wso2/product-microgateway/adapter/pkg/discovery/api/wso2/discovery/api"
-	logger "github.com/wso2/product-microgateway/adapter/internal/loggers"
 )
 
 // GetRoutesClustersEndpoints generates the routes, clusters and endpoints (envoy)
 // when the openAPI Json is provided. For websockets apiJsn created from api.yaml file is considerd.
-func GetRoutesClustersEndpoints(mgwSwagger mgw.MgwSwagger, upstreamCerts []byte, interceptorCerts []byte,
+func GetRoutesClustersEndpoints(mgwSwagger mgw.MgwSwagger, upstreamCerts map[string][]byte, interceptorCerts map[string][]byte,
 	vHost string, organizationID string) ([]*routev3.Route, []*clusterv3.Cluster, []*corev3.Address) {
 	var routes []*routev3.Route
 	var clusters []*clusterv3.Cluster
@@ -208,6 +208,7 @@ func generateRPCEndpointCluster(inputEndpointCluster *mgw.EndpointCluster) *api.
 		Urls: urls,
 	}
 	if inputEndpointCluster.Config != nil {
+		// retry config
 		var retryConfig *api.RetryConfig
 		if inputEndpointCluster.Config.RetryConfig != nil {
 			inputRetryConfig := inputEndpointCluster.Config.RetryConfig
@@ -216,8 +217,17 @@ func generateRPCEndpointCluster(inputEndpointCluster *mgw.EndpointCluster) *api.
 				StatusCodes: inputRetryConfig.StatusCodes,
 			}
 		}
+		// timeout config
+		var timeoutConfig *api.TimeoutConfig
+		if inputEndpointCluster.Config.TimeoutInMillis != 0 { // if zero, means not set. Then, global timeout is applied via route configs.
+			timeoutConfig = &api.TimeoutConfig{
+				RouteTimeoutInMillis: uint32(inputEndpointCluster.Config.TimeoutInMillis),
+			}
+		}
+		// Set all endpoint configs
 		endpoints.Config = &api.EndpointClusterConfig{
-			RetryConfig: retryConfig,
+			RetryConfig:   retryConfig,
+			TimeoutConfig: timeoutConfig,
 		}
 	}
 	return endpoints
