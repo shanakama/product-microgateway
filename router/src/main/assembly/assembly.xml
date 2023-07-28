@@ -43,13 +43,19 @@
             <outputDirectory>wasm/websocket</outputDirectory>
         </file>
         <file>
-            <source>../resources/security/ca-certificates.crt</source>
-            <outputDirectory>security/truststore</outputDirectory>
-        </file>
-        <file>
             <source>../resources/license/LICENSE-ROUTER.txt</source>
             <outputDirectory/>
             <destName>LICENSE.txt</destName>
+        </file>
+        <file>
+            <source>src/main/resources/envoy.yaml.template</source>
+            <outputDirectory/>
+            <destName>envoy.yaml.template</destName>
+        </file>
+        <file>
+            <source>src/main/resources/docker-entrypoint.sh</source>
+            <outputDirectory/>
+            <destName>docker-entrypoint.sh</destName>
         </file>
     </files>
     <fileSets>

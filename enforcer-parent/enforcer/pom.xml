@@ -21,7 +21,7 @@
     <parent>
         <groupId>org.wso2.choreo.connect</groupId>
         <artifactId>enforcer-parent</artifactId>
-        <version>1.2.0-beta-SNAPSHOT</version>
+        <version>1.3.0-m1-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -157,7 +157,7 @@
                             <exclude>org.apache.logging:*</exclude>
                             <exclude>log4j:*</exclude>
                             <exclude>org.slf4j:slf4j-log4j12</exclude>
-                            <exclude>org.apache.logging.log4j:log4j-slf4j-impl</exclude>
+                            <exclude>org.apache.logging.log4j:log4j-slf4j2-impl</exclude>
                             <exclude>org.apache.logging.log4j:log4j-api</exclude>
                             <exclude>org.apache.logging.log4j:log4j-core</exclude>
                             <exclude>org.apache.logging.log4j:log4j-jcl</exclude>
@@ -192,7 +192,7 @@
                                 org.apache.logging.log4j, org.json.wso2
                             </includeGroupIds>
                             <includeArtifactIds>
-                                log4j-api, log4j-core, log4j-jcl, json, log4j-slf4j-impl
+                                log4j-api, log4j-core, log4j-jcl, json, log4j-slf4j2-impl
                             </includeArtifactIds>
                         </configuration>
                     </execution>
@@ -280,17 +280,6 @@
                         </goals>
                         <configuration>
                             <url>https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v${grpc.healthProbe.version}/grpc_health_probe-linux-amd64</url>
-                            <outputDirectory>${project.build.directory}</outputDirectory>
-                        </configuration>
-                    </execution>
-                    <execution>
-                        <id>download-grpc-health-probe-arm64</id>
-                        <phase>generate-resources</phase>
-                        <goals>
-                            <goal>wget</goal>
-                        </goals>
-                        <configuration>
-                            <url>https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v${grpc.healthProbe.version}/grpc_health_probe-linux-arm64</url>
                             <outputDirectory>${project.build.directory}</outputDirectory>
                         </configuration>
                     </execution>
@@ -462,6 +451,14 @@
             </exclusions>
         </dependency>
         <dependency>
+            <groupId>jaxen</groupId>
+            <artifactId>jaxen</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>jline</groupId>
+            <artifactId>jline</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.wso2.orbit.org.apache.geronimo.specs</groupId>
             <artifactId>geronimo-jms_1.1_spec</artifactId>
         </dependency>
@@ -528,7 +525,11 @@
         <!-- slf4j binding -->
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-slf4j-impl</artifactId>
+            <artifactId>log4j-slf4j2-impl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
         </dependency>
         <dependency>
             <groupId>com.azure</groupId>

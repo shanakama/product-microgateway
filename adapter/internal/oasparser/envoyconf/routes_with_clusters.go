@@ -35,6 +35,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	awslambdav3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/aws_lambda/v3"
 	cors_filter_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/cors/v3"
 	extAuthService "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_authz/v3"
 	local_rate_limitv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/local_ratelimit/v3"
@@ -210,11 +211,44 @@ func CreateRoutesWithClusters(mgwSwagger model.MgwSwagger, upstreamCerts map[str
 					Severity:  logging.MAJOR,
 					ErrorCode: 2230,
 				})
-				return nil, nil, nil, fmt.Errorf("Error while creating routes for Websocket API. %v", err)
+				return nil, nil, nil, fmt.Errorf("error while creating routes for Websocket API. %v", err)
 			}
 			routes = append(routes, routesP...)
 		}
 		return routes, clusters, endpoints, nil
+
+	}
+
+	if mgwSwagger.EndpointType == constants.AwsLambda {
+		for _, resource := range mgwSwagger.GetResources() {
+			amznResourceName := ""
+			for i, operation := range resource.GetOperations() {
+				value := model.ResolveAmznResourceName(operation.GetVendorExtensions())
+
+				if (i != 0) && (amznResourceName != value) {
+					logger.LoggerOasparser.Errorf("ARNs in all the operations of the same resource path should have the same value. | APIID: %v API Title: %v API version: %v", mgwSwagger.GetID(), apiTitle, apiVersion)
+					return nil, nil, nil, fmt.Errorf("error while creating routes for AWS Lambda API : %s version : %s", apiTitle, apiVersion)
+				} else if value == "" {
+					logger.LoggerOasparser.Errorf("ARN cannot be empty. | APIID: %v API Title: %v API version: %v", mgwSwagger.GetID(), apiTitle, apiVersion)
+				} else {
+					amznResourceName = value
+				}
+				resource.SetAmznResourceName(amznResourceName)
+			}
+
+			routesX, err := createRoutes(genRouteCreateParams(&mgwSwagger, resource, vHost, "", awslambdaClusterName, awslambdaClusterName, nil, nil, organizationID, false))
+			if err != nil {
+				logger.LoggerXds.ErrorC(logging.ErrorDetails{
+					Message: fmt.Sprintf("Error while creating routes for AWS Lambda API : %s version : %s. Error: %s",
+						apiTitle, apiVersion, err.Error()),
+					Severity:  logging.MAJOR,
+					ErrorCode: 2239,
+				})
+				return nil, nil, nil, fmt.Errorf("error while creating routes for AWS Lambda API : %s version : %s. %v", apiTitle, apiVersion, err)
+			}
+
+			routes = append(routes, routesX...)
+		}
 	}
 
 	if mgwSwagger.GetAPIType() == constants.GRAPHQL {
@@ -227,7 +261,7 @@ func CreateRoutesWithClusters(mgwSwagger model.MgwSwagger, upstreamCerts map[str
 				Severity:  logging.MAJOR,
 				ErrorCode: 2233,
 			})
-			return nil, nil, nil, fmt.Errorf("Error while creating routes for GraphQL API : %s version : %s. %v", apiTitle, apiVersion, err)
+			return nil, nil, nil, fmt.Errorf("error while creating routes for GraphQL API : %s version : %s. %v", apiTitle, apiVersion, err)
 		}
 		routes = append(routes, routesP...)
 		return routes, clusters, endpoints, nil
@@ -364,7 +398,7 @@ func CreateRoutesWithClusters(mgwSwagger model.MgwSwagger, upstreamCerts map[str
 				Severity:  logging.MAJOR,
 				ErrorCode: 2231,
 			})
-			return nil, nil, nil, fmt.Errorf("Error while creating routes. %v", err)
+			return nil, nil, nil, fmt.Errorf("error while creating routes. %v", err)
 		}
 		if apiLevelBasePathSand != "" || isResourceBasePathSandAvailable {
 			logger.LoggerOasparser.Debugf("Creating sandbox route for : %v:%v:%v - %v", apiTitle, apiVersion, resource.GetPath(), resourceBasePathSand)
@@ -377,7 +411,7 @@ func CreateRoutesWithClusters(mgwSwagger model.MgwSwagger, upstreamCerts map[str
 					Severity:  logging.MAJOR,
 					ErrorCode: 2232,
 				})
-				return nil, nil, nil, fmt.Errorf("Error while creating sandbox routes. %v", err)
+				return nil, nil, nil, fmt.Errorf("error while creating sandbox routes. %v", err)
 			}
 			// Sandbox route should be appended before to prod route to have the expected header based sandbox routing.
 			routes = append(routes, routeS...)
@@ -402,6 +436,31 @@ func getClusterName(epPrefix string, organizationID string, vHost string, swagge
 func CreateLuaCluster(interceptorCerts map[string][]byte, endpoint model.InterceptEndpoint) (*clusterv3.Cluster, []*corev3.Address, error) {
 	logger.LoggerOasparser.Debug("creating a lua cluster ", endpoint.ClusterName)
 	return processEndpoints(endpoint.ClusterName, &endpoint.EndpointCluster, interceptorCerts, endpoint.ClusterTimeout, endpoint.EndpointCluster.Endpoints[0].Basepath)
+}
+
+// CreateAwsLambdaCluster creates AWS Lambda cluster configuration.
+func CreateAwsLambdaCluster(conf *config.Config) (*clusterv3.Cluster, []*corev3.Address, error) {
+	epTimeout := conf.Envoy.ClusterTimeoutInSeconds
+	epCluster := &model.EndpointCluster{
+		Endpoints: []model.Endpoint{{
+			Host:    "lambda." + conf.Envoy.AwsLambda.AwsRegion + ".amazonaws.com",
+			URLType: httpsURLType,
+			Port:    uint32(443),
+		}},
+	}
+
+	cluster, address, err := processEndpoints(awslambdaClusterName, epCluster, nil, epTimeout, "")
+	cluster.Metadata = &corev3.Metadata{
+		FilterMetadata: map[string]*structpb.Struct{
+			"com.amazonaws.lambda": {
+				Fields: map[string]*structpb.Value{
+					"egress_gateway": structpb.NewBoolValue(true),
+				},
+			},
+		},
+	}
+
+	return cluster, address, err
 }
 
 // CreateTracingCluster creates a cluster definition for router's tracing server.
@@ -435,6 +494,10 @@ func CreateTracingCluster(conf *config.Config) (*clusterv3.Cluster, []*corev3.Ad
 	epCluster.Endpoints[0].Host = epHost
 	epCluster.Endpoints[0].Port = epPort
 	epCluster.Endpoints[0].Basepath = epPath
+
+	if conf.Tracing.Type == TracerTypeOtlp {
+		epCluster.HTTP2BackendEnabled = true
+	}
 
 	return processEndpoints(tracingClusterName, epCluster, nil, epTimeout, epPath)
 }
@@ -749,6 +812,14 @@ func createRoutes(params *routeCreateParams) (routes []*routev3.Route, err error
 	requestInterceptor := params.requestInterceptor
 	responseInterceptor := params.responseInterceptor
 	isDefaultVersion := params.isDefaultVersion
+	endpointType := params.endpointType
+	amznResourceName := ""
+
+	if resource != nil {
+		amznResourceName = resource.GetAmznResourceName()
+	}
+
+	conf, _ := config.ReadConfigs()
 
 	logger.LoggerOasparser.Debug("creating a route....")
 	var (
@@ -894,6 +965,36 @@ end`
 		wellknown.CORS:                      corsFilter,
 	}
 
+	if endpointType == constants.AwsLambda {
+
+		var mode awslambdav3.Config_InvocationMode
+
+		if strings.ToUpper(conf.Envoy.AwsLambda.InvocationMode) == invocationModeSynchronous {
+			mode = awslambdav3.Config_SYNCHRONOUS
+		} else {
+			mode = awslambdav3.Config_ASYNCHRONOUS
+		}
+
+		awsLambdaPerFilterConfig := awslambdav3.PerRouteConfig{
+			InvokeConfig: &awslambdav3.Config{
+				Arn:                amznResourceName,
+				PayloadPassthrough: conf.Envoy.AwsLambda.PayloadPassthrough,
+				InvocationMode:     mode,
+			},
+		}
+
+		awsLambdaMarshelled := proto.NewBuffer(nil)
+		awsLambdaMarshelled.SetDeterministic(true)
+		_ = awsLambdaMarshelled.Marshal(&awsLambdaPerFilterConfig)
+
+		awsLambdaFilter := &any.Any{
+			TypeUrl: awsLambdaRouteName,
+			Value:   awsLambdaMarshelled.Bytes(),
+		}
+
+		perRouteFilterConfigs[awsLambdaFilterName] = awsLambdaFilter
+	}
+
 	logger.LoggerOasparser.Debug("adding route ", resourcePath)
 
 	if resource != nil && resource.HasPolicies() {
@@ -920,7 +1021,7 @@ end`
 						constants.ActionHeaderAdd, resourcePath, operation.GetMethod())
 					requestHeaderToAdd, err := generateHeaderToAddRouteConfig(requestPolicy.Parameters)
 					if err != nil {
-						return nil, fmt.Errorf("Error adding request policy %s to operation %s of resource %s."+
+						return nil, fmt.Errorf("error adding request policy %s to operation %s of resource %s."+
 							" %v", requestPolicy.Action, operation.GetMethod(), resourcePath, err)
 					}
 					requestHeadersToAdd = append(requestHeadersToAdd, requestHeaderToAdd)
@@ -930,7 +1031,7 @@ end`
 						constants.ActionHeaderRemove, resourcePath, operation.GetMethod())
 					requestHeaderToRemove, err := generateHeaderToRemoveString(requestPolicy.Parameters)
 					if err != nil {
-						return nil, fmt.Errorf("Error adding request policy %s to operation %s of resource %s."+
+						return nil, fmt.Errorf("error adding request policy %s to operation %s of resource %s."+
 							" %v", requestPolicy.Action, operation.GetMethod(), resourcePath, err)
 					}
 					requestHeadersToRemove = append(requestHeadersToRemove, requestHeaderToRemove)
@@ -941,7 +1042,7 @@ end`
 					regexRewrite, err := generateRewritePathRouteConfig(routePath, resourcePath, endpointBasepath,
 						requestPolicy.Parameters)
 					if err != nil {
-						errMsg := fmt.Sprintf("Error adding request policy %s to operation %s of resource %s. %v",
+						errMsg := fmt.Sprintf("error adding request policy %s to operation %s of resource %s. %v",
 							constants.ActionRewritePath, operation.GetMethod(), resourcePath, err)
 						logger.LoggerOasparser.ErrorC(logging.ErrorDetails{
 							Message:   errMsg,
@@ -979,7 +1080,7 @@ end`
 						constants.ActionHeaderAdd, resourcePath, operation.GetMethod())
 					responseHeaderToAdd, err := generateHeaderToAddRouteConfig(responsePolicy.Parameters)
 					if err != nil {
-						return nil, fmt.Errorf("Error adding response policy %s to operation %s of resource %s."+
+						return nil, fmt.Errorf("error adding response policy %s to operation %s of resource %s."+
 							" %v", responsePolicy.Action, operation.GetMethod(), resourcePath, err)
 					}
 					responseHeadersToAdd = append(responseHeadersToAdd, responseHeaderToAdd)
@@ -989,7 +1090,7 @@ end`
 						constants.ActionHeaderRemove, resourcePath, operation.GetMethod())
 					responseHeaderToRemove, err := generateHeaderToRemoveString(responsePolicy.Parameters)
 					if err != nil {
-						return nil, fmt.Errorf("Error adding response policy %s to operation %s of resource %s."+
+						return nil, fmt.Errorf("error adding response policy %s to operation %s of resource %s."+
 							" %v", responsePolicy.Action, operation.GetMethod(), resourcePath, err)
 					}
 					responseHeadersToRemove = append(responseHeadersToRemove, responseHeaderToRemove)
@@ -1001,7 +1102,8 @@ end`
 				logger.LoggerOasparser.Debug("Creating two routes to support method rewrite for %s %s. New method: %s",
 					resourcePath, operation.GetMethod(), newMethod)
 				match1 := generateRouteMatch(routePath)
-				match1.Headers = generateHTTPMethodMatcher(operation.GetMethod(), params.isSandbox, sandClusterName)
+				match1.Headers = generateHTTPMethodMatcher(includeOptionsMethod(operation.GetMethod()), params.isSandbox,
+					sandClusterName)
 				match2 := generateRouteMatch(routePath)
 				match2.Headers = generateHTTPMethodMatcher(newMethod, params.isSandbox, sandClusterName)
 
@@ -1013,13 +1115,13 @@ end`
 				metadataValue := operation.GetMethod() + "_to_" + newMethod
 				match2.DynamicMetadata = generateMetadataMatcherForInternalRoutes(metadataValue)
 
-				action1 := generateRouteAction(apiType, prodRouteConfig, sandRouteConfig)
-				action2 := generateRouteAction(apiType, prodRouteConfig, sandRouteConfig)
+				action1 := generateRouteAction(apiType, prodRouteConfig, sandRouteConfig, endpointType)
+				action2 := generateRouteAction(apiType, prodRouteConfig, sandRouteConfig, endpointType)
 
 				// Create route1 for current method.
 				// Do not add policies to route config. Send via enforcer
-				route1 := generateRouteConfig(xWso2Basepath+operation.GetMethod(), match1, action1, nil, decorator, perRouteFilterConfigs,
-					nil, nil, nil, nil)
+				route1 := generateRouteConfig(xWso2Basepath+"-"+operation.GetMethod(), match1, action1, nil, decorator,
+					perRouteFilterConfigs, nil, nil, nil, nil)
 
 				// Create route2 for new method.
 				// Add all policies to route config. Do not send via enforcer.
@@ -1029,17 +1131,19 @@ end`
 					action2.Route.RegexRewrite = generateRegexMatchAndSubstitute(routePath, endpointBasepath, resourcePath)
 				}
 				configToSkipEnforcer := generateFilterConfigToSkipEnforcer()
-				route2 := generateRouteConfig(xWso2Basepath, match2, action2, nil, decorator, configToSkipEnforcer,
-					requestHeadersToAdd, requestHeadersToRemove, responseHeadersToAdd, responseHeadersToRemove)
+				route2 := generateRouteConfig(xWso2Basepath+"-"+metadataValue, match2, action2, nil, decorator,
+					configToSkipEnforcer, requestHeadersToAdd, requestHeadersToRemove, responseHeadersToAdd,
+					responseHeadersToRemove)
 
 				routes = append(routes, route1)
 				routes = append(routes, route2)
 			} else {
 				logger.LoggerOasparser.Debug("Creating routes for resource with policies", resourcePath, operation.GetMethod())
 				// create route for current method. Add policies to route config. Send via enforcer
-				action := generateRouteAction(apiType, prodRouteConfig, sandRouteConfig)
+				action := generateRouteAction(apiType, prodRouteConfig, sandRouteConfig, endpointType)
 				match := generateRouteMatch(routePath)
-				match.Headers = generateHTTPMethodMatcher(operation.GetMethod(), params.isSandbox, sandClusterName)
+				match.Headers = generateHTTPMethodMatcher(includeOptionsMethod(operation.GetMethod()), params.isSandbox,
+					sandClusterName)
 				match.DynamicMetadata = generateMetadataMatcherForExternalRoutes()
 				if pathRewriteConfig != nil {
 					action.Route.RegexRewrite = pathRewriteConfig
@@ -1056,12 +1160,9 @@ end`
 		logger.LoggerOasparser.Debug("Creating routes for resource that has no policies")
 		// No policies defined for the resource. Therefore, create one route for all operations.
 		methodRegex := strings.Join(resourceMethods, "|")
-		if !strings.Contains(methodRegex, "OPTIONS") {
-			methodRegex = methodRegex + "|OPTIONS"
-		}
 		match := generateRouteMatch(routePath)
-		match.Headers = generateHTTPMethodMatcher(methodRegex, params.isSandbox, sandClusterName)
-		action := generateRouteAction(apiType, prodRouteConfig, sandRouteConfig)
+		match.Headers = generateHTTPMethodMatcher(includeOptionsMethod(methodRegex), params.isSandbox, sandClusterName)
+		action := generateRouteAction(apiType, prodRouteConfig, sandRouteConfig, endpointType)
 		action.Route.RegexRewrite = generateRegexMatchAndSubstitute(routePath, endpointBasepath, resourcePath)
 
 		route := generateRouteConfig(xWso2Basepath, match, action, nil, decorator, perRouteFilterConfigs,
@@ -1379,7 +1480,7 @@ func isMethodRewrite(resourcePath, method string, policyParams interface{}) (isM
 	var paramsToRewriteMethod map[string]interface{}
 	var ok bool
 	if paramsToRewriteMethod, ok = policyParams.(map[string]interface{}); !ok {
-		return false, fmt.Errorf("Error while processing policy parameter map for "+
+		return false, fmt.Errorf("error while processing policy parameter map for "+
 			"request policy %s to operation %s of resource %s. Map: %v",
 			constants.ActionRewriteMethod, method, resourcePath, policyParams)
 	}
@@ -1404,20 +1505,20 @@ func getRewriteMethod(resourcePath, method string, policyParams interface{}) (re
 	var paramsToRewriteMethod map[string]interface{}
 	var ok bool
 	if paramsToRewriteMethod, ok = policyParams.(map[string]interface{}); !ok {
-		return "", fmt.Errorf("Error while processing policy parameter map for "+
+		return "", fmt.Errorf("error while processing policy parameter map for "+
 			"request policy %s to operation %s of resource %s. Map: %v",
 			constants.ActionRewriteMethod, method, resourcePath, policyParams)
 	}
 
 	updatedMethod, exists := paramsToRewriteMethod[constants.UpdatedMethod]
 	if !exists {
-		return "", fmt.Errorf("Error adding request policy %s to operation %s of resource %s."+
+		return "", fmt.Errorf("error adding request policy %s to operation %s of resource %s."+
 			" Policy parameter updatedMethod not found",
 			constants.ActionRewriteMethod, method, resourcePath)
 	}
 	updatedMethodString, isString := updatedMethod.(string)
 	if !isString {
-		return "", fmt.Errorf("Error adding request policy %s to operation %s of resource %s."+
+		return "", fmt.Errorf("error adding request policy %s to operation %s of resource %s."+
 			" Policy parameter updatedMethod is in incorrect format", constants.ActionRewriteMethod,
 			method, resourcePath)
 	}
@@ -1505,6 +1606,7 @@ func genRouteCreateParams(swagger *model.MgwSwagger, resource *model.Resource, v
 		passRequestPayloadToEnforcer: swagger.GetXWso2RequestBodyPass(),
 		isDefaultVersion:             swagger.IsDefaultVersion,
 		isSandbox:                    isSandbox,
+		endpointType:                 swagger.GetEndpointType(),
 	}
 
 	if swagger.GetProdEndpoints() != nil {
@@ -1704,4 +1806,11 @@ func createInterceptorResourceClusters(mgwSwagger model.MgwSwagger, interceptorC
 		}
 	}
 	return clusters, endpoints, &operationalReqInterceptors, &operationalRespInterceptorVal
+}
+
+func includeOptionsMethod(methodRegex string) string {
+	if !strings.Contains(methodRegex, "OPTIONS") {
+		return methodRegex + "|OPTIONS"
+	}
+	return methodRegex
 }

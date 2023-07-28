@@ -229,6 +229,15 @@ soapErrorInXMLEnabled = false
   # If enabled, request body will send as raw bytes, otherwise it will be a UTF-8 string request body.
   packAsBytes = false
 
+# Configs for invoke api with Aws lambda endpoint
+[router.awsLambda]
+  # Sets the AWS Regions related to respective lambda endpoint
+  awsRegion = "us-east-1"
+  # Whether to transform the request (headers and body) to a JSON payload or pass it as is.
+  payloadPassthrough = true
+  # Sets the invocation mode to SYNCHRONOUS or ASYNCHRONOUS
+  invocationMode = "SYNCHRONOUS"
+
 # Configurations relevant to the router filters
 [router.filters]
   # Configurations relevant to the compression filter
@@ -261,7 +270,7 @@ soapErrorInXMLEnabled = false
     memoryLevel = 3
     # base two logarithmic of the compressor's window size (value range is 9 to 15)
     windowBits = 12
-    # zlib compression level (higher values provide better compression level. Value range is 0 to 9)
+    # zlib compression level (higher values provide better compression level. Value range is 1 to 9)
     compressionLevel = 9
     # zlib compression strategy (values: defaultStrategy, gzipFiltered, gzipHuffmanOnly, gzipRle, gzipFixed)
     compressionStrategy = "defaultStrategy"
