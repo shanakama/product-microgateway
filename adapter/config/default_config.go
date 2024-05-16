@@ -66,6 +66,12 @@ var defaultConfig = &Config{
 			MaxRetryCount:      20,
 			ArtifactsDirectory: "/home/wso2/git-artifacts",
 		},
+		Metrics: metrics{
+			Enabled:            false,
+			Type:               "prometheus",
+			Port:               19085,
+			CollectionInterval: 5,
+		},
 	},
 	Envoy: envoy{
 		ListenerHost:                     "0.0.0.0",
@@ -128,6 +134,11 @@ var defaultConfig = &Config{
 		},
 		Downstream: envoyDownstream{
 			TLS: downstreamTLS{
+				MinimumProtocolVersion: "TLS1_1",
+				MaximumProtocolVersion: "TLS1_2",
+				Ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256, ECDHE-RSA-AES128-GCM-SHA256, ECDHE-ECDSA-AES128-SHA, ECDHE-RSA-AES128-SHA, " +
+					"AES128-GCM-SHA256, AES128-SHA, ECDHE-ECDSA-AES256-GCM-SHA384, ECDHE-RSA-AES256-GCM-SHA384, " +
+					"ECDHE-ECDSA-AES256-SHA, ECDHE-RSA-AES256-SHA, AES256-GCM-SHA384, AES256-SHA",
 				TrustedCertPath: "/etc/ssl/certs/ca-certificates.crt",
 				MTLSAPIsEnabled: false,
 			},
@@ -176,6 +187,7 @@ var defaultConfig = &Config{
 				},
 			},
 		},
+		PerConnectionBufferLimitBytes: 1048576,
 	},
 	Enforcer: enforcer{
 		Management: management{

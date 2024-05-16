@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -36,6 +37,7 @@ import (
 	logger "github.com/wso2/product-microgateway/adapter/internal/loggers"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // CreateRoutesConfigForRds generates the default RouteConfiguration.
@@ -160,7 +162,6 @@ func createListeners(conf *config.Config) []*listenerv3.Listener {
 	filters = append(filters, &connectionManagerFilterP)
 
 	if conf.Envoy.SecuredListenerPort > 0 {
-		var tlsFilter *tlsv3.DownstreamTlsContext
 
 		listenerHostAddress := defaultListenerHostAddress
 		if len(conf.Envoy.SecuredListenerHost) > 0 {
@@ -185,36 +186,42 @@ func createListeners(conf *config.Config) []*listenerv3.Listener {
 				Filters: filters,
 			},
 			},
+			PerConnectionBufferLimitBytes: wrapperspb.UInt32(conf.Envoy.PerConnectionBufferLimitBytes),
 		}
 
 		tlsCert := generateTLSCert(conf.Envoy.KeyStore.KeyPath, conf.Envoy.KeyStore.CertPath)
+		// Convert the cipher string to a string array
+		ciphersArray := strings.Split(conf.Envoy.Downstream.TLS.Ciphers, ",")
+		for i := range ciphersArray {
+			ciphersArray[i] = strings.TrimSpace(ciphersArray[i])
+		}
+
+		tlsFilter := &tlsv3.DownstreamTlsContext{
+			CommonTlsContext: &tlsv3.CommonTlsContext{
+				//TlsCertificateSdsSecretConfigs
+				TlsCertificates: []*tlsv3.TlsCertificate{tlsCert},
+				TlsParams: &tlsv3.TlsParameters{
+					TlsMinimumProtocolVersion: createTLSProtocolVersion(conf.Envoy.Downstream.TLS.MinimumProtocolVersion),
+					TlsMaximumProtocolVersion: createTLSProtocolVersion(conf.Envoy.Downstream.TLS.MaximumProtocolVersion),
+					CipherSuites:              ciphersArray,
+				},
+			},
+		}
+
 		//TODO: (VirajSalaka) Make it configurable via SDS
 		if conf.Envoy.Downstream.TLS.MTLSAPIsEnabled {
-			tlsFilter = &tlsv3.DownstreamTlsContext{
-				// This is false since the authentication will be done at the enforcer
-				RequireClientCertificate: &wrappers.BoolValue{
-					Value: false,
-				},
-				CommonTlsContext: &tlsv3.CommonTlsContext{
-					//TlsCertificateSdsSecretConfigs
-					TlsCertificates: []*tlsv3.TlsCertificate{tlsCert},
-					//For the purpose of including peer certificate into the request context
-					ValidationContextType: &tlsv3.CommonTlsContext_ValidationContext{
-						ValidationContext: &tlsv3.CertificateValidationContext{
-							TrustedCa: &corev3.DataSource{
-								Specifier: &corev3.DataSource_Filename{
-									Filename: conf.Envoy.Downstream.TLS.TrustedCertPath,
-								},
-							},
+			// This is false since the authentication will be done at the enforcer
+			tlsFilter.RequireClientCertificate = &wrappers.BoolValue{
+				Value: false,
+			}
+			//For the purpose of including peer certificate into the request context
+			tlsFilter.CommonTlsContext.ValidationContextType = &tlsv3.CommonTlsContext_ValidationContext{
+				ValidationContext: &tlsv3.CertificateValidationContext{
+					TrustedCa: &corev3.DataSource{
+						Specifier: &corev3.DataSource_Filename{
+							Filename: conf.Envoy.Downstream.TLS.TrustedCertPath,
 						},
 					},
-				},
-			}
-		} else {
-			tlsFilter = &tlsv3.DownstreamTlsContext{
-				CommonTlsContext: &tlsv3.CommonTlsContext{
-					//TlsCertificateSdsSecretConfigs
-					TlsCertificates: []*tlsv3.TlsCertificate{tlsCert},
 				},
 			}
 		}
@@ -263,6 +270,7 @@ func createListeners(conf *config.Config) []*listenerv3.Listener {
 				Filters: filters,
 			},
 			},
+			PerConnectionBufferLimitBytes: wrapperspb.UInt32(conf.Envoy.PerConnectionBufferLimitBytes),
 		}
 		listeners = append(listeners, &listener)
 		logger.LoggerOasparser.Infof("Non-secured Listener is added. %s : %d", listenerHostAddress, conf.Envoy.ListenerPort)
